@@ -1,0 +1,6 @@
+https://circuitdigest.com/microcontroller-projects/interfacing-rain-sensor-with-arduino     <<<< rain sensor
+
+https://how2electronics.com/measure-wind-speed-using-anemometer-arduino/    <<<< wind speed Sensor 
+https://www.instructables.com/How-to-Use-a-Adafruit-Anemometer-Sensor-With-Ardui/
+https://iotprojectsideas.com/wind-speed-meter-using-anemometer-arduino/
+https://wiki.dfrobot.com/Wind_Speed_Sensor_Voltage_Type_0-5V__SKU_SEN0170   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<,,
