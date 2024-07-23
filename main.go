@@ -1,197 +1,159 @@
+//mosquitto_sub -p 8883 --cafile ca.crt --cert client.crt --key client.key -h 192.168.1.14 -t "weather"
+//mosquitto_pub -p 8883 --cafile ca.crt --cert client.crt --key client.key -h 192.168.1.14 -m "hello" -t "weather"
+
 package main
 
 import (
-	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
+	"os"
 	"time"
 
+	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var client *mongo.Client
-var errclient error
-
-var weatherData struct {
-	Speed      float32 `json:"speed"`
-	Temp       float32 `json:"temp"`
-	Humidity   float32 `json:"humidity"`
-	Rain       bool    `json:"rain"`
-	Visibility int     `json:"visibility"`
-	Time       int64   `json:"time"`
-}
-
-func init() {
-	username := "root"
-	password := "1234"
-	clusterAddress := "localhost:27017" // e.g., "localhost:27017" or "cluster0.mongodb.net"
-
-	// Create the connection URI
-	uri := fmt.Sprintf("mongodb://%s:%s@%s", username, password, clusterAddress)
-
-	// Set client options
-	clientOptions := options.Client().ApplyURI(uri)
-
-	// Connect to MongoDB
-	client, errclient = mongo.Connect(context.TODO(), clientOptions)
-	if errclient != nil {
-		log.Fatal(errclient)
-	}
-
+type MyMessage struct {
+	Photo       float32 `json:"photo"`
+	Rain        int     `json:"rain"`
+	Humidity    float32 `json:"humidity"`
+	Temperature float32 `json:"temperature"`
+	HeatIndex   float32 `json:"heatIndex"`
+	WindSpeed   float32 `json:"windSpeed"`
 }
 
 func main() {
-	PingDB(client)
-	router := gin.Default()
-	router.POST("/insert", insertDocument)
-	router.GET("/retrieve", retrieveDocument)
-	router.Run(":8080")
+	message := make(chan string)
+	send := make(chan string)
+	go ConnectToBroker(message)
+	r := gin.Default()
+
+	r.GET("/events", func(c *gin.Context) { eventsHandler(c, send, message) })
+	// http.HandleFunc("/events", eventsHandler)
+	fmt.Println("Listening on :8080")
+	if err := r.RunTLS(":8080", "servermain.crt", "servermain.key"); err != nil {
+		log.Fatalf("Failed to start HTTP server: %v", err)
+	}
 }
 
-func insertDocument(c *gin.Context) {
-	wd := weatherData
-	err := c.ShouldBindJSON(&wd)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	wd.Time = time.Now().Unix()
-	collection := client.Database("weather").Collection("weatherdata")
-	insertResult, err := collection.InsertOne(context.TODO(), wd)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+func eventsHandler(c *gin.Context, send chan string, message chan string) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Expose-Headers", "Content-Type")
+	// c.Header("X-Accel-Buffering", "no")
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			return
+		case t := <-message:
+			fmt.Println(t)
+			// elapsed := time.Since(start)
+			// Convert elapsed time to seconds
+			// miliSeconds := elapsed.Milliseconds()
+			// heartBeat := 60 / (miliSeconds + 10)
+			// CalHeart := CaloriesConsamptin(float32(heartBeat))
+			// // CalSpeed := CalorinesConsumptionMET(float32(t.Speed))
+			// start = time.Now()
+			// // totalCals := CalHeart + CalSpeed
+			// stringValue := fmt.Sprintf("%f", totalCals)
+			// dataToSend := fmt.Sprintf("Speed: %.2f Calorines Consumption: %s", t.Speed, stringValue)
+			// dataToSend := HealthData{HeartBit: 35.2, Speed: 25.3}
+			// fmt.Fprintf(c.Writer, "data: %s\n\n", dataToSend)
+			// time.Sleep(20 * time.Millisecond)
+			// c.Writer.Flush()
 
-	c.JSON(http.StatusOK, gin.H{"insertedID": insertResult.InsertedID})
-
+		default:
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 }
 
-func retrieveDocument(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+func CaloriesConsamptin(heartBit float32) float32 {
 
-	findOptions := options.Find()
-	findOptions.SetSort(bson.D{{Key: "time", Value: -1}})
-	findOptions.SetLimit(5)
-	collection := client.Database("weather").Collection("weatherdata")
+	return (1 * (heartBit*0.6309 - 40*0.1988 + 80*0.2017 - 55.0969) * (4.184 / 1000))
+}
 
-	cur, err := collection.Find(ctx, bson.D{}, findOptions)
+func ConnectToBroker(message chan string) {
+
+	// MQTT broker detailsgo run m
+	broker := "tls://192.168.1.16:8883"
+	topic := "weather"
+	clientID := "mqtt-subscriber"
+
+	// Load client cert
+	cert, err := tls.LoadX509KeyPair("./mqtt/config/cert/clientsse.crt", "./mqtt/config/cert/clientsse.key")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+		log.Fatalf("Failed to load client certificate: %v", err)
 	}
 
-	results := []bson.M{}
-	for cur.Next(ctx) {
-		var result bson.M
-		err := cur.Decode(&result)
+	// Load CA cert
+	caCert, err := os.ReadFile("./mqtt/config/cert/ca.crt")
+	if err != nil {
+		log.Fatalf("Failed to read CA certificate: %v", err)
+	}
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(caCert)
+
+	// Create TLS config
+	tlsConfig := &tls.Config{
+		Certificates:       []tls.Certificate{cert},
+		RootCAs:            caCertPool,
+		InsecureSkipVerify: true, //<<<<<<<<<<<<<<<<<< SOS for self sighn
+	}
+
+	opts := MQTT.NewClientOptions()
+	opts.AddBroker(broker)
+	opts.SetClientID(clientID)
+	opts.SetTLSConfig(tlsConfig)
+
+	// Define the message handler
+	opts.SetDefaultPublishHandler(func(client MQTT.Client, msg MQTT.Message) {
+
+		fmt.Printf("Received message: %s from topic: %s\n", msg.Payload(), msg.Topic())
+
+		var myMessage MyMessage
+
+		err := json.Unmarshal(msg.Payload(), &myMessage)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Printf("Error deserializing message: %v", err)
 			return
 		}
-		results = append(results, result)
-		// fmt.Println(result)
+
+		fmt.Println(myMessage.Photo, myMessage.Rain)
+
+		// strMsg := strings.Split(string(msg.Payload()), "-------")
+		// floatSpeed, err := strconv.ParseFloat(strMsg[1], 32)
+		// if err != nil {
+		// 	fmt.Println(err)
+		// }
+		// intHeart, err := strconv.ParseFloat(strMsg[1], 32)
+		// if err != nil {
+		// 	fmt.Println(err)
+		// }
+		// hd := HealthData{HeartBit: 11.5, Speed: 32.5}
+		// fmt.Println(hd, "ASADASDASDASD")
+		// message <- "hello"
+
+	})
+
+	// Create and start an MQTT client
+	client := MQTT.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		log.Fatalf("Failed to connect to MQTT broker: %v", token.Error())
 	}
-	fmt.Println(results, "<<<<<<<<<<<<<<<<")
-	c.JSON(http.StatusOK, results)
-}
 
-func DisconectDB(client *mongo.Client) {
-
-	err := client.Disconnect(context.TODO())
-	if err != nil {
-		log.Fatal(err)
+	// Subscribe to the topic
+	if token := client.Subscribe(topic, 1, nil); token.Wait() && token.Error() != nil {
+		log.Fatalf("Failed to subscribe to topic: %v", token.Error())
 	}
 
-}
-
-func PingDB(client *mongo.Client) {
-	err := client.Ping(context.TODO(), nil)
-	if err != nil {
-		log.Fatal(err)
+	// Keep the connection open
+	for {
+		time.Sleep(1 * time.Second)
 	}
-	fmt.Println("DB IS CONNECTED")
-
 }
-
-// package main
-
-// import (
-//     "context"
-//     "fmt"
-//     "log"
-//     "time"
-
-//     "go.mongodb.org/mongo-driver/bson"
-//     "go.mongodb.org/mongo-driver/mongo"
-//     "go.mongodb.org/mongo-driver/mongo/options"
-// )
-
-// func main() {
-//     // Replace these with your MongoDB credentials
-//     username := "yourUsername"
-//     password := "yourPassword"
-//     clusterAddress := "yourClusterAddress" // e.g., "localhost:27017" or "cluster0.mongodb.net"
-
-//     // Create the connection URI
-//     uri := fmt.Sprintf("mongodb://%s:%s@%s", username, password, clusterAddress)
-
-//     // Set client options
-//     clientOptions := options.Client().ApplyURI(uri)
-
-//     // Connect to MongoDB
-//     client, err := mongo.Connect(context.TODO(), clientOptions)
-//     if err != nil {
-//         log.Fatal(err)
-//     }
-
-//     // Check the connection
-//     err = client.Ping(context.TODO(), nil)
-//     if err != nil {
-//         log.Fatal(err)
-//     }
-
-//     fmt.Println("Connected to MongoDB!")
-
-//     // Get a handle for your collection
-//     collection := client.Database("testdb").Collection("testcollection")
-
-//     // Create a document to insert
-//     document := bson.D{
-//         {Key: "name", Value: "Alice"},
-//         {Key: "age", Value: 25},
-//         {Key: "city", Value: "New York"},
-//     }
-
-//     // Insert the document
-//     insertResult, err := collection.InsertOne(context.TODO(), document)
-//     if err != nil {
-//         log.Fatal(err)
-//     }
-
-//     fmt.Println("Inserted a single document: ", insertResult.InsertedID)
-
-//     // Find a single document
-//     var result bson.M
-//     filter := bson.D{{Key: "name", Value: "Alice"}}
-//     err = collection.FindOne(context.TODO(), filter).Decode(&result)
-//     if err != nil {
-//         log.Fatal(err)
-//     }
-
-//     // Print the result
-//     fmt.Println("Found a single document: ", result)
-
-//     // Disconnect from MongoDB
-//     err = client.Disconnect(context.TODO())
-//     if err != nil {
-//         log.Fatal(err)
-//     }
-
-//     fmt.Println("Connection to MongoDB closed.")
-// }
