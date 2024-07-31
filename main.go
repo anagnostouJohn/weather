@@ -4,34 +4,60 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"slices"
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type MyMessage struct {
+type WeatherData struct {
 	Photo       float32 `json:"photo"`
 	Rain        int     `json:"rain"`
 	Humidity    float32 `json:"humidity"`
 	Temperature float32 `json:"temperature"`
 	HeatIndex   float32 `json:"heatIndex"`
 	WindSpeed   float32 `json:"windSpeed"`
+	TimeData    int32   `json:"timeData"`
 }
+
+type ValsToReturn struct {
+	Photo       []float32
+	Rain        []int
+	Humidity    []float32
+	Temperature []float32
+	HeatIndex   []float32
+	WindSpeed   []float32
+}
+
+// var client *mongo.Client
+var ctx = context.TODO()
+var collection *mongo.Collection
+
+const uri = "mongodb://root:1234@localhost:27017"
 
 func main() {
 	message := make(chan string)
-	send := make(chan string)
 	go ConnectToBroker(message)
 	r := gin.Default()
-
-	r.GET("/events", func(c *gin.Context) { eventsHandler(c, send, message) })
+	r.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"*"}, // You can specify allowed origins here
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Authorization"},
+	}))
+	r.GET("/getdata", Getdata)
 	// http.HandleFunc("/events", eventsHandler)
 	fmt.Println("Listening on :8080")
 	if err := r.RunTLS(":8080", "servermain.crt", "servermain.key"); err != nil {
@@ -39,47 +65,81 @@ func main() {
 	}
 }
 
-func eventsHandler(c *gin.Context, send chan string, message chan string) {
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
+func Getdata(c *gin.Context) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Header("Access-Control-Allow-Origin", "*")
-	c.Header("Access-Control-Expose-Headers", "Content-Type")
-	// c.Header("X-Accel-Buffering", "no")
-	for {
-		select {
-		case <-c.Request.Context().Done():
-			return
-		case t := <-message:
-			fmt.Println(t)
-			// elapsed := time.Since(start)
-			// Convert elapsed time to seconds
-			// miliSeconds := elapsed.Milliseconds()
-			// heartBeat := 60 / (miliSeconds + 10)
-			// CalHeart := CaloriesConsamptin(float32(heartBeat))
-			// // CalSpeed := CalorinesConsumptionMET(float32(t.Speed))
-			// start = time.Now()
-			// // totalCals := CalHeart + CalSpeed
-			// stringValue := fmt.Sprintf("%f", totalCals)
-			// dataToSend := fmt.Sprintf("Speed: %.2f Calorines Consumption: %s", t.Speed, stringValue)
-			// dataToSend := HealthData{HeartBit: 35.2, Speed: 25.3}
-			// fmt.Fprintf(c.Writer, "data: %s\n\n", dataToSend)
-			// time.Sleep(20 * time.Millisecond)
-			// c.Writer.Flush()
+	const m = 0.1
+	const b = 0.0
 
-		default:
-			time.Sleep(100 * time.Millisecond)
-		}
+	collection := ConnectToMongo()
+	findOptions := options.Find()
+	findOptions.SetSort(bson.D{{Key: "_id", Value: -1}})
+	findOptions.SetLimit(100)
+
+	cur, err := collection.Find(ctx, bson.D{{}}, findOptions)
+	if err != nil {
+		log.Fatal(err)
 	}
+	var results []WeatherData
+	for cur.Next(ctx) {
+
+		var result WeatherData
+		err := cur.Decode(&result)
+		if err != nil {
+			log.Fatal(err)
+		}
+		results = append(results, result)
+	}
+
+	if err := cur.Err(); err != nil {
+		log.Fatal(err)
+	}
+	slices.Reverse(results)
+	// Close the cursor once finished
+	dTs := ValsToReturn{}
+	for _, j := range results {
+		// Humidity    []float32
+		// WindSpeed   float32
+		dTs.HeatIndex = append(dTs.HeatIndex, j.HeatIndex)
+		dTs.Temperature = append(dTs.Temperature, j.Temperature)
+		dTs.Photo = append(dTs.Photo, j.Photo)
+		if j.Rain == 0 {
+			dTs.Rain = append(dTs.Rain, 1)
+		} else if j.Rain == 1 {
+			dTs.Rain = append(dTs.Rain, 0)
+		}
+
+		dTs.WindSpeed = append(dTs.WindSpeed, rawToWindSpeed(int(j.WindSpeed), m, b))
+		dTs.Humidity = append(dTs.Humidity, j.Humidity)
+	}
+	cur.Close(ctx)
+
+	// Respond with the results
+	c.JSON(http.StatusOK, dTs)
+
+	// Disconnect from MongoDB
+
+	// fmt.Println("Connection to MongoDB closed.")
 }
 
-func CaloriesConsamptin(heartBit float32) float32 {
+func ConnectToMongo() *mongo.Collection {
+	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+	opts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPI)
+	client, err := mongo.Connect(ctx, opts)
+	if err != nil {
+		panic(err)
+	}
 
-	return (1 * (heartBit*0.6309 - 40*0.1988 + 80*0.2017 - 55.0969) * (4.184 / 1000))
+	var result bson.M
+	if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "ping", Value: 1}}).Decode(&result); err != nil {
+		panic(err)
+	}
+	fmt.Println("Pinged your deployment. You successfully connected to MongoDB!")
+	collection = client.Database("weather").Collection("data")
+	return collection
 }
-
 func ConnectToBroker(message chan string) {
-
+	collection = ConnectToMongo()
 	// MQTT broker detailsgo run m
 	broker := "tls://192.168.1.16:8883"
 	topic := "weather"
@@ -115,29 +175,24 @@ func ConnectToBroker(message chan string) {
 	opts.SetDefaultPublishHandler(func(client MQTT.Client, msg MQTT.Message) {
 
 		fmt.Printf("Received message: %s from topic: %s\n", msg.Payload(), msg.Topic())
+		fmt.Println("!")
+		var wd WeatherData
 
-		var myMessage MyMessage
-
-		err := json.Unmarshal(msg.Payload(), &myMessage)
+		err := json.Unmarshal(msg.Payload(), &wd)
 		if err != nil {
 			log.Printf("Error deserializing message: %v", err)
 			return
 		}
+		now := time.Now()
 
-		fmt.Println(myMessage.Photo, myMessage.Rain)
-
-		// strMsg := strings.Split(string(msg.Payload()), "-------")
-		// floatSpeed, err := strconv.ParseFloat(strMsg[1], 32)
-		// if err != nil {
-		// 	fmt.Println(err)
-		// }
-		// intHeart, err := strconv.ParseFloat(strMsg[1], 32)
-		// if err != nil {
-		// 	fmt.Println(err)
-		// }
-		// hd := HealthData{HeartBit: 11.5, Speed: 32.5}
-		// fmt.Println(hd, "ASADASDASDASD")
-		// message <- "hello"
+		// Get the Unix timestamp (seconds since January 1, 1970 UTC)
+		epoch := now.Unix()
+		wd.TimeData = int32(epoch)
+		insertResult, err := collection.InsertOne(ctx, wd)
+		if err != nil {
+			log.Fatal(err, "<<<<<<<<<<<<<<<<")
+		}
+		fmt.Println("Inserted a document: ", insertResult.InsertedID)
 
 	})
 
@@ -156,4 +211,8 @@ func ConnectToBroker(message chan string) {
 	for {
 		time.Sleep(1 * time.Second)
 	}
+}
+
+func rawToWindSpeed(rawValue int, m, b float32) float32 {
+	return m*float32(rawValue) + b
 }
