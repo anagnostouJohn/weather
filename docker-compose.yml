@@ -26,13 +26,6 @@ services:
     restart: unless-stopped
 
 
-
-# volumes for mapping data,config and log
-# volumes:
-#   config:
-#   data:
-#   log:
-
 networks:
   default:
     name: mqtt5-network

@@ -1,6 +1,6 @@
-//mosquitto_sub -p 8883 --cafile ca.crt --cert client.crt --key client.key -h 192.168.1.14 -t "weather"
-//mosquitto_pub -p 8883 --cafile ca.crt --cert client.crt --key client.key -h 192.168.1.14 -m "hello" -t "weather"
-
+// mosquitto_sub -p 8883 --cafile ca.crt --cert client.crt --key client.key -h 192.168.1.14 -t "weather"
+// mosquitto_pub -p 8883 --cafile ca.crt --cert client.crt --key client.key -h 192.168.1.14 -m "hello" -t "weather"
+// Final
 package main
 
 import (

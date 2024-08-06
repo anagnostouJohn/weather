@@ -25,7 +25,7 @@ int decimal = 2;                          // Decimal places of the sensor value 
 int photo;                            /* Assign the name "sensor0" as analog output value from Channel C0 */
 int wind;  
 
-
+   
 DHT dht(DHTPIN, DHTTYPE);
 
 
@@ -200,44 +200,21 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 void loop() {
-    StaticJsonDocument<200> doc;
-
+  StaticJsonDocument<200> doc;
   if (!mqtt_client.connected()) {
     connectToMQTT();
   }
-     mqtt_client.loop();
-  // reads the input on analog pin (value between 0 and 4095)
-  // int analogValue = analogRead(LIGHT_SENSOR_PIN);
+  mqtt_client.loop();
+  digitalWrite(S0,LOW); digitalWrite(S1,LOW); digitalWrite(S2,LOW); digitalWrite(S3,LOW);
+  photo = analogRead(SIG);
 
-  // Serial.print("Analog Value Photoresistor = ");
-  // Serial.print(analogValue);   // the raw analog reading
-      digitalWrite(S0,LOW); digitalWrite(S1,LOW); digitalWrite(S2,LOW); digitalWrite(S3,LOW);
-    photo = analogRead(SIG);
-
-    digitalWrite(S0,HIGH); digitalWrite(S1,LOW); digitalWrite(S2,LOW); digitalWrite(S3,LOW);
-    wind = analogRead(SIG);
-
-    doc["photo"] = photo;
-    
-    // doc["value"] = 42;
-	// Serial.print("Digital Output RainDrop: ");
-	
+  digitalWrite(S0,HIGH); digitalWrite(S1,LOW); digitalWrite(S2,LOW); digitalWrite(S3,LOW);
+  windanalog = analogRead(SIG);
+  float outvoltage = windanalog * (5.0 / 1023.0);
+  int wind = 6 * outvoltage;
+  doc["photo"] = photo;
 	int val = digitalRead(sensorPin);	// Read the sensor output
   doc["rain"] = val;
-	// Serial.println(val);
-  // We'll have a few threshholds, qualitatively determined
-  // if (analogValue < 40) {
-  //   Serial.println(" => Dark");
-  // } else if (analogValue < 800) {
-  //   Serial.println(" => Dim");
-  // } else if (analogValue < 2000) {
-  //   Serial.println(" => Light");
-  // } else if (analogValue < 3200) {
-  //   Serial.println(" => Bright");
-  // } else {
-  //   Serial.println(" => Very bright");
-  // }
-
   float h = dht.readHumidity();
   // Read temperature as Celsius (the default)
   float t = dht.readTemperature();
@@ -257,30 +234,13 @@ void loop() {
 
   // Serial.print(F("Humidity: "));
   doc["humidity"] = h;
-  // Serial.print(h);
-  // Serial.print(F("%  Temperature: "));
   doc["temperature"] = t;
-  // Serial.print(t);
-  // Serial.print(F("°C "));
-  // Serial.print(f);
-  // Serial.print(F("°F  Heat index: "));
-  // Serial.print(hic);
-   doc["heatIndex"] = hic;
-  // Serial.print(F("°C "));
-  // Serial.print(hif);
-  // Serial.println(F("°F"));
-   doc["windSpeed"] = wind;
+  doc["heatIndex"] = hic;
+  doc["windSpeed"] = wind;
+  char buffer[256];
+  size_t n = serializeJson(doc, buffer);
 
-    // char payload[80];  
-    // snprintf(payload, sizeof(payload), "%d-------%.2f", 125,12.3 );
-    // mqtt_client.publish(mqtt_topic, String(Signal) + "-------" + String(a.acceleration.y));
+  mqtt_client.publish(mqtt_topic, buffer, n);    
 
-
-    char buffer[256];
-    size_t n = serializeJson(doc, buffer);
-    // Serial.println(payload);
-    mqtt_client.publish(mqtt_topic, buffer, n);
-    delay(10);    
-
-  delay(500);
+  delay(1000);
 }
