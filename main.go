@@ -15,6 +15,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,21 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+type Config struct {
+	Database struct {
+		Server   string
+		User     string
+		Password string
+		Port     string
+	}
+	Broker struct {
+		Ip       string
+		Port     string
+		Topic    string
+		ClientId string
+	}
+}
 
 type WeatherData struct {
 	Photo       float32 `json:"photo"`
@@ -45,12 +61,22 @@ type ValsToReturn struct {
 // var client *mongo.Client
 var ctx = context.TODO()
 var collection *mongo.Collection
+var config Config
 
-const uri = "mongodb://root:1234@localhost:27017"
+var uri string
 
 func main() {
+	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
+		log.Fatal(err)
+	}
+
+	//"mongodb://root:1234@localhost:27017"
+	uri = fmt.Sprintf("mongodb://%s:%s@%s:%s", config.Database.User, config.Database.Password, config.Database.Server, config.Database.Port)
+	fmt.Println(uri)
+	// time.Sleep(100 * time.Second)
 	message := make(chan string)
 	go ConnectToBroker(message)
+
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"}, // You can specify allowed origins here
@@ -68,8 +94,6 @@ func main() {
 func Getdata(c *gin.Context) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Header("Access-Control-Allow-Origin", "*")
-	const m = 0.1
-	const b = 0.0
 
 	collection := ConnectToMongo()
 	findOptions := options.Find()
@@ -109,7 +133,7 @@ func Getdata(c *gin.Context) {
 			dTs.Rain = append(dTs.Rain, 0)
 		}
 
-		dTs.WindSpeed = append(dTs.WindSpeed, rawToWindSpeed(int(j.WindSpeed), m, b))
+		dTs.WindSpeed = append(dTs.WindSpeed, float32(j.WindSpeed))
 		dTs.Humidity = append(dTs.Humidity, j.Humidity)
 	}
 	cur.Close(ctx)
@@ -141,9 +165,11 @@ func ConnectToMongo() *mongo.Collection {
 func ConnectToBroker(message chan string) {
 	collection = ConnectToMongo()
 	// MQTT broker detailsgo run m
-	broker := "tls://192.168.1.16:8883"
-	topic := "weather"
-	clientID := "mqtt-subscriber"
+	//tls://192.168.1.16:8883
+	broker := fmt.Sprintf("tls://%s:%s", config.Broker.Ip, config.Broker.Port)
+	fmt.Println(broker, "AAAA")
+	topic := config.Broker.Topic
+	clientID := config.Broker.ClientId
 
 	// Load client cert
 	cert, err := tls.LoadX509KeyPair("./mqtt/config/cert/clientsse.crt", "./mqtt/config/cert/clientsse.key")
@@ -211,8 +237,4 @@ func ConnectToBroker(message chan string) {
 	for {
 		time.Sleep(1 * time.Second)
 	}
-}
-
-func rawToWindSpeed(rawValue int, m, b float32) float32 {
-	return m*float32(rawValue) + b
 }
