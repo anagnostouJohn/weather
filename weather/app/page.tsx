@@ -24,7 +24,7 @@ export default function Home() {
   useEffect(() => {
     const fetchData = async () => {
     
-      axios.get("https://192.168.1.16:8080/getdata").then(function(response){
+      axios.get("https://192.168.1.114:8080/getdata").then(function(response){
         
          setWind(response.data.WindSpeed)
          setTemperature(response.data.Temperature)

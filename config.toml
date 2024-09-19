@@ -5,7 +5,7 @@ password = "1234"
 port = "27017"
 
 [broker]
-ip="192.168.1.16"
+ip="192.168.1.114"
 port="8883"
 topic="weather"
 clientID = "mqtt-subscriber"
